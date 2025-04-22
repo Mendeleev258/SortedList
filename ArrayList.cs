@@ -12,73 +12,101 @@ namespace SortedList
 {
     internal class ArrayList<T> : IList<T>
     {
+        private struct Node
+        {
+            public T Value;
+            public int NextIndex;
+        }
+
         private int _count;
-        private T[] _array;
+        private Node[] _array;
         private readonly IComparer<T> _comparer;
+        private int _firstIndex = -1; // Индекс первого элемента в упорядоченном списке
+        private int _freeIndex = -1;  // Индекс первого свободного элемента
         private int Capacity => _array.Length;
 
         public int Count => _count;
-        public T this[int index] => _array[index];
+
+        public T this[int index]
+        {
+            get
+            {
+                if (index < 0 || index >= _count)
+                    throw new IndexOutOfRangeException();
+
+                int currentIndex = _firstIndex;
+                for (int i = 0; i < index; i++)
+                {
+                    currentIndex = _array[currentIndex].NextIndex;
+                }
+                return _array[currentIndex].Value;
+            }
+        }
 
         public ArrayList()
         {
             _count = 0;
-            _array = Array.Empty<T>();
+            _array = Array.Empty<Node>();
             _comparer = Comparer<T>.Default;
         }
 
         public ArrayList(IComparer<T> comparer)
         {
             _count = 0;
-            _array = Array.Empty<T>();
+            _array = Array.Empty<Node>();
             _comparer = comparer;
-        }
-
-
-        public ArrayList(StreamReader stream, Func<string, T> parser, IComparer<T> comparer)
-        {
-            if (stream == null) throw new ArgumentNullException(nameof(stream));
-            if (parser == null) throw new ArgumentNullException(nameof(parser));
-
-            string line = stream.ReadLine();
-
-            if (string.IsNullOrWhiteSpace(line)) return;
-
-            _count = 0;
-            _array = Array.Empty<T>();
-
-            string[] elements = line.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
-            _comparer = comparer;
-
-            foreach (string element in elements)
-            {
-                try
-                {
-                    T value = parser(element);
-                    Add(value);
-                }
-                catch (Exception ex)
-                {
-                    throw new FormatException($"Ошибка парсинга элемента '{element}': {ex.Message}", ex);
-                }
-            }
         }
 
         public int Add(T value)
         {
             if (_count == Capacity)
                 ExtendArray();
-            int addingIndex = FindPosForAdding(value);
-            ShiftToRight(addingIndex);
-            _array[addingIndex] = value;
+
+            int newIndex = AllocateNode();
+            _array[newIndex].Value = value;
+
+            if (_firstIndex == -1)
+            {
+                // Первый элемент в списке
+                _firstIndex = newIndex;
+                _array[newIndex].NextIndex = -1;
+            }
+            else
+            {
+                // Находим место для вставки
+                int current = _firstIndex;
+                int prev = -1;
+
+                while (current != -1 && _comparer.Compare(_array[current].Value, value) <= 0)
+                {
+                    prev = current;
+                    current = _array[current].NextIndex;
+                }
+
+                if (prev == -1)
+                {
+                    // Вставка в начало
+                    _array[newIndex].NextIndex = _firstIndex;
+                    _firstIndex = newIndex;
+                }
+                else
+                {
+                    // Вставка в середину или конец
+                    _array[newIndex].NextIndex = _array[prev].NextIndex;
+                    _array[prev].NextIndex = newIndex;
+                }
+            }
+
             _count++;
-            return addingIndex;
+            return IndexOf(value);
         }
 
         public void Clear()
         {
-            _array = Array.Empty<T>();
+            _array = Array.Empty<Node>();
             _count = 0;
+            _firstIndex = -1;
+            _freeIndex = -1;
         }
 
         public bool Contains(T value)
@@ -88,9 +116,11 @@ namespace SortedList
 
         public IEnumerator<T> GetEnumerator()
         {
-            for (int i = 0; i < _count; i++)
+            int current = _firstIndex;
+            while (current != -1)
             {
-                yield return _array[i];
+                yield return _array[current].Value;
+                current = _array[current].NextIndex;
             }
         }
 
@@ -99,108 +129,129 @@ namespace SortedList
             return GetEnumerator();
         }
 
-        public int IndexOf(T value) // Binary Search
+        public int IndexOf(T value)
         {
-            return Array.BinarySearch(_array, value, _comparer);
+            int index = 0;
+            int current = _firstIndex;
 
-           /* int left = 0;
-            int right = _count - 1;
-            while (left <= right)
+            while (current != -1)
             {
-                int mid = left + (right - left) / 2;
-                int comparison = _comparer.Compare(_array[mid], value);
-                if (comparison == 0)
-                {
-                    return mid; // Элемент найден
-                }
-                else if (comparison < 0)
-                {
-                    left = mid + 1; // Искомый элемент находится в правой половине
-                }
-                else
-                {
-                    right = mid - 1; // Искомый элемент находится в левой половине
-                }
+                if (_comparer.Compare(_array[current].Value, value) == 0)
+                    return index;
+
+                current = _array[current].NextIndex;
+                index++;
             }
-            return -1; // Элемент не найден*/
+
+            return -1;
         }
 
         public void Remove(T value)
         {
             int index = IndexOf(value);
-            RemoveAt(index);
+            if (index >= 0)
+                RemoveAt(index);
         }
 
         public void RemoveAt(int index)
         {
-            if (index < 0 || index >= Capacity)
+            if (index < 0 || index >= _count)
+                throw new IndexOutOfRangeException();
+
+            int current = _firstIndex;
+            int prev = -1;
+
+            for (int i = 0; i < index; i++)
             {
-                throw new IndexOutOfRangeException("Индекс выходит за границы массива.");
+                prev = current;
+                current = _array[current].NextIndex;
             }
 
-            for (int i = index; i < _count - 1; i++)
+            if (prev == -1)
             {
-                _array[i] = _array[i + 1];
+                // Удаление первого элемента
+                _firstIndex = _array[current].NextIndex;
             }
+            else
+            {
+                // Удаление из середины или конца
+                _array[prev].NextIndex = _array[current].NextIndex;
+            }
+
+            FreeNode(current);
             _count--;
         }
 
         public IList<T> subList(int fromIndex, int toIndex)
         {
-            ArrayList <T> list = new ArrayList<T>(_comparer);
-            for (int i = fromIndex; i < toIndex; i++) 
+            ArrayList<T> list = new ArrayList<T>(_comparer);
+            int current = _firstIndex;
+            int currentIndex = 0;
+
+            while (current != -1 && currentIndex < toIndex)
             {
-                list.Add(_array[i]);
+                if (currentIndex >= fromIndex)
+                    list.Add(_array[current].Value);
+
+                current = _array[current].NextIndex;
+                currentIndex++;
             }
+
             return list;
         }
 
         public void DebugPrintToConsole()
         {
-            for (int i = 0; i < _count; i++)
+            Console.WriteLine("Array contents:");
+            for (int i = 0; i < Capacity; i++)
             {
-                Console.Write(_array[i]);
-                Console.Write(" ");
+                Console.Write($"[{i}]: {_array[i].Value} -> {_array[i].NextIndex} | ");
+            }
+            Console.WriteLine();
+
+            Console.WriteLine("Ordered list:");
+            int current = _firstIndex;
+            while (current != -1)
+            {
+                Console.Write(_array[current].Value + " ");
+                current = _array[current].NextIndex;
             }
             Console.WriteLine();
         }
 
         private void ExtendArray()
         {
-            if (_array == null)
+            int newCapacity = Capacity == 0 ? 1 : Capacity * 2;
+            Node[] newArray = new Node[newCapacity];
+
+            if (Capacity > 0)
+                Array.Copy(_array, newArray, Capacity);
+
+            // Инициализируем свободные элементы
+            for (int i = Capacity; i < newCapacity; i++)
             {
-                throw new InvalidOperationException("Массив не инициализирован.");
+                newArray[i].NextIndex = _freeIndex;
+                _freeIndex = i;
             }
 
-            T[] tmpArray = _array;
-            
-            if (Capacity == 0)
-            {
-                _array = new T[1];
-            }
-            else
-            {
-                _array = new T[Capacity * 2];
-            }
-
-            Array.Copy(tmpArray, _array, tmpArray.Length);
+            _array = newArray;
         }
 
-        private void ShiftToRight(int index)
+        private int AllocateNode()
         {
-            if (index < 0 || index >= Capacity)
-                throw new IndexOutOfRangeException("Индекс выходит за границы массива.");
+            if (_freeIndex == -1)
+                ExtendArray();
 
-            for (int i = _count; i > index; i--)
-                _array[i] = _array[i - 1];
+            int index = _freeIndex;
+            _freeIndex = _array[index].NextIndex;
+            _array[index].NextIndex = -1; // На всякий случай
+            return index;
         }
 
-        private int FindPosForAdding(T value)
+        private void FreeNode(int index)
         {
-            int i = 0;
-            while (i < _count && _comparer.Compare(_array[i], value) <= 0)
-                i++;
-            return i;
+            _array[index].NextIndex = _freeIndex;
+            _freeIndex = index;
         }
     }
 }
